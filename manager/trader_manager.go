@@ -434,6 +434,19 @@ func (tm *TraderManager) GetTrader(id string) (*trader.AutoTrader, error) {
 	return t, nil
 }
 
+// RemoveTrader 从内存中移除指定ID的trader
+func (tm *TraderManager) RemoveTrader(id string) bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if _, exists := tm.traders[id]; !exists {
+		return false
+	}
+
+	delete(tm.traders, id)
+	return true
+}
+
 // GetAllTraders 获取所有trader
 func (tm *TraderManager) GetAllTraders() map[string]*trader.AutoTrader {
 	tm.mu.RLock()
@@ -610,9 +623,17 @@ func containsUserPrefix(traderID string) bool {
 // LoadUserTraders 为特定用户加载交易员到内存
 func (tm *TraderManager) LoadUserTraders(database *config.Database, userID string) error {
 	autoStartTraders := make([]*trader.AutoTrader, 0)
+	staleTraders := make([]*trader.AutoTrader, 0)
 	tm.mu.Lock()
 	defer func() {
 		tm.mu.Unlock()
+
+		// 停止并清理内存中已删除的交易员
+		for _, tr := range staleTraders {
+			log.Printf("🧹 移除用户 %s 已删除的交易员: %s", userID, tr.GetID())
+			tr.Stop()
+		}
+
 		for _, at := range autoStartTraders {
 			go func(tr *trader.AutoTrader) {
 				log.Printf("▶️ 自动恢复用户 %s 的交易员 %s（标记为运行中）", userID, tr.GetName())
@@ -669,6 +690,23 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 		if err := json.Unmarshal([]byte(defaultCoinsStr), &defaultCoins); err != nil {
 			log.Printf("⚠️ 解析默认币种配置失败: %v，使用空列表", err)
 			defaultCoins = []string{}
+		}
+	}
+
+	// 用于快速判定某个交易员是否仍存在于数据库
+	currentTraderIDs := make(map[string]struct{}, len(traders))
+	for _, traderCfg := range traders {
+		currentTraderIDs[traderCfg.ID] = struct{}{}
+	}
+
+	// 清理数据库已删除但仍在内存中的交易员
+	for id, at := range tm.traders {
+		if !isUserTrader(id, userID) {
+			continue
+		}
+		if _, exist := currentTraderIDs[id]; !exist {
+			delete(tm.traders, id)
+			staleTraders = append(staleTraders, at)
 		}
 	}
 

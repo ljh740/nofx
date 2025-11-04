@@ -625,6 +625,10 @@ func (s *Server) handleDeleteTrader(c *gin.Context) {
 		}
 	}
 
+	if removed := s.traderManager.RemoveTrader(traderID); removed {
+		log.Printf("🧼  已从内存管理器移除交易员: %s", traderID)
+	}
+
 	log.Printf("✓ 交易员已删除: %s", traderID)
 	c.JSON(http.StatusOK, gin.H{"message": "交易员已删除"})
 }

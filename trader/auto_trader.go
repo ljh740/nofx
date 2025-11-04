@@ -15,6 +15,7 @@ import (
 	"nofx/pool"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/samber/lo"
@@ -113,12 +114,14 @@ type AutoTrader struct {
 	tradingCoins          []string // 实际交易币种列表
 	lastResetTime         time.Time
 	stopUntil             time.Time
-	isRunning             bool
 	startTime             time.Time                    // 系统启动时间
 	callCount             int                          // AI调用次数
 	positionFirstSeenTime map[string]int64             // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	lastPositions         map[string]*PositionSnapshot // 上一个周期的持仓快照 (symbol_side -> snapshot)
 	newsProcessor         []news.Provider              // 新闻
+	stateMu               sync.RWMutex                 // 保护运行状态
+	isRunning             bool                         // 是否正在运行
+	stopCh                chan struct{}                // 停止信号
 	lastBalanceSyncTime   time.Time                    // 上次余额同步时间
 	database              *config.Database             // 数据库引用（用于自动更新余额）
 	userID                string                       // 用户ID
@@ -261,7 +264,6 @@ func NewAutoTrader(traderConfig AutoTraderConfig, db *config.Database, userID st
 		lastResetTime:         time.Now(),
 		startTime:             time.Now(),
 		callCount:             0,
-		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
 		lastPositions:         make(map[string]*PositionSnapshot),
 		newsProcessor:         newsProcessor,
@@ -273,7 +275,18 @@ func NewAutoTrader(traderConfig AutoTraderConfig, db *config.Database, userID st
 
 // Run 运行自动交易主循环
 func (at *AutoTrader) Run() error {
+	at.stateMu.Lock()
+	if at.isRunning {
+		at.stateMu.Unlock()
+		return fmt.Errorf("trader %s 已在运行中", at.name)
+	}
+
 	at.isRunning = true
+	at.stopCh = make(chan struct{})
+	at.startTime = time.Now()
+	stopCh := at.stopCh
+	at.stateMu.Unlock()
+
 	log.Println("🚀 AI驱动自动交易系统启动")
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
 	log.Printf("⚙️  扫描间隔: %v", at.config.ScanInterval)
@@ -282,27 +295,63 @@ func (at *AutoTrader) Run() error {
 	ticker := time.NewTicker(at.config.ScanInterval)
 	defer ticker.Stop()
 
+	defer func() {
+		at.stateMu.Lock()
+		if at.stopCh == stopCh {
+			at.stopCh = nil
+		}
+		at.isRunning = false
+		at.stateMu.Unlock()
+	}()
+
 	// 首次立即执行
 	if err := at.runCycle(); err != nil {
 		log.Printf("❌ 执行失败: %v", err)
 	}
 
-	for at.isRunning {
+	for {
 		select {
+		case <-stopCh:
+			return nil
 		case <-ticker.C:
+			at.stateMu.RLock()
+			running := at.isRunning
+			at.stateMu.RUnlock()
+			if !running {
+				continue
+			}
+
 			if err := at.runCycle(); err != nil {
 				log.Printf("❌ 执行失败: %v", err)
 			}
 		}
 	}
-
-	return nil
 }
 
 // Stop 停止自动交易
 func (at *AutoTrader) Stop() {
+	at.stateMu.Lock()
+	if !at.isRunning {
+		at.stateMu.Unlock()
+		return
+	}
+
 	at.isRunning = false
+	if at.stopCh != nil {
+		close(at.stopCh)
+		at.stopCh = nil
+	}
+	at.stateMu.Unlock()
+
 	log.Println("⏹ 自动交易系统停止")
+}
+
+func (at *AutoTrader) incrementCallCount() int {
+	at.stateMu.Lock()
+	at.callCount++
+	count := at.callCount
+	at.stateMu.Unlock()
+	return count
 }
 
 // autoSyncBalanceIfNeeded 自动同步余额（智能检测充值/提现，即使有持仓也能检测）
@@ -456,10 +505,10 @@ func (at *AutoTrader) autoSyncBalanceIfNeeded() {
 
 // runCycle 运行一个交易周期（使用AI全权决策）
 func (at *AutoTrader) runCycle() error {
-	at.callCount++
+	count := at.incrementCallCount()
 
 	log.Print("\n" + strings.Repeat("=", 70))
-	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
+	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), count)
 	log.Print(strings.Repeat("=", 70))
 
 	// 创建决策记录
@@ -469,8 +518,12 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	// 1. 检查是否需要停止交易
-	if time.Now().Before(at.stopUntil) {
-		remaining := at.stopUntil.Sub(time.Now())
+	at.stateMu.RLock()
+	stopUntil := at.stopUntil
+	at.stateMu.RUnlock()
+
+	if time.Now().Before(stopUntil) {
+		remaining := stopUntil.Sub(time.Now())
 		log.Printf("⏸ 风险控制：暂停交易中，剩余 %.0f 分钟", remaining.Minutes())
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("风险控制暂停中，剩余 %.0f 分钟", remaining.Minutes())
@@ -479,17 +532,19 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	// 2. 重置日盈亏（每天重置）
+	at.stateMu.Lock()
 	if time.Since(at.lastResetTime) > 24*time.Hour {
 		at.dailyPnL = 0
 		at.lastResetTime = time.Now()
 		log.Println("📅 日盈亏已重置")
 	}
+	at.stateMu.Unlock()
 
 	// 3. 自动同步余额（每10分钟检查一次，充值/提现后自动更新）
 	at.autoSyncBalanceIfNeeded()
 
 	// 4. 收集交易上下文
-	ctx, err := at.buildTradingContext()
+	ctx, err := at.buildTradingContext(count)
 	if err != nil {
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("构建交易上下文失败: %v", err)
@@ -688,7 +743,7 @@ func (at *AutoTrader) runCycle() error {
 }
 
 // buildTradingContext 构建交易上下文
-func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
+func (at *AutoTrader) buildTradingContext(callCount int) (*decision.Context, error) {
 	// 1. 获取账户信息
 	balance, err := at.trader.GetBalance()
 	if err != nil {
@@ -859,7 +914,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	ctx := &decision.Context{
 		CurrentTime:     time.Now().Format("2006-01-02 15:04:05"),
 		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
-		CallCount:       at.callCount,
+		CallCount:       callCount,
 		BTCETHLeverage:  at.config.BTCETHLeverage,  // 使用配置的杠杆倍数
 		AltcoinLeverage: at.config.AltcoinLeverage, // 使用配置的杠杆倍数
 		Account: decision.AccountInfo{
@@ -1473,19 +1528,29 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 		aiProvider = "Qwen"
 	}
 
+	at.stateMu.RLock()
+	isRunning := at.isRunning
+	startTime := at.startTime
+	callCount := at.callCount
+	stopUntil := at.stopUntil
+	lastReset := at.lastResetTime
+	dailyPnL := at.dailyPnL
+	at.stateMu.RUnlock()
+
 	return map[string]interface{}{
 		"trader_id":       at.id,
 		"trader_name":     at.name,
 		"ai_model":        at.aiModel,
 		"exchange":        at.exchange,
-		"is_running":      at.isRunning,
-		"start_time":      at.startTime.Format(time.RFC3339),
-		"runtime_minutes": int(time.Since(at.startTime).Minutes()),
-		"call_count":      at.callCount,
+		"is_running":      isRunning,
+		"start_time":      startTime.Format(time.RFC3339),
+		"runtime_minutes": int(time.Since(startTime).Minutes()),
+		"call_count":      callCount,
 		"initial_balance": at.initialBalance,
 		"scan_interval":   at.config.ScanInterval.String(),
-		"stop_until":      at.stopUntil.Format(time.RFC3339),
-		"last_reset_time": at.lastResetTime.Format(time.RFC3339),
+		"stop_until":      stopUntil.Format(time.RFC3339),
+		"last_reset_time": lastReset.Format(time.RFC3339),
+		"daily_pnl":       dailyPnL,
 		"ai_provider":     aiProvider,
 	}
 }
@@ -1551,6 +1616,10 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		marginUsedPct = (totalMarginUsed / totalEquity) * 100
 	}
 
+	at.stateMu.RLock()
+	dailyPnL := at.dailyPnL
+	at.stateMu.RUnlock()
+
 	return map[string]interface{}{
 		// 核心字段
 		"total_equity":      totalEquity,           // 账户净值 = wallet + unrealized
@@ -1563,7 +1632,7 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		"total_pnl_pct":        totalPnLPct,        // 总盈亏百分比
 		"total_unrealized_pnl": totalUnrealizedPnL, // 未实现盈亏（从持仓计算）
 		"initial_balance":      at.initialBalance,  // 初始余额
-		"daily_pnl":            at.dailyPnL,        // 日盈亏
+		"daily_pnl":            dailyPnL,           // 日盈亏
 
 		// 持仓信息
 		"position_count":  len(positions),  // 持仓数量
