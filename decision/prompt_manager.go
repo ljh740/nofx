@@ -13,6 +13,7 @@ import (
 type PromptTemplate struct {
 	Name    string // 模板名称（文件名，不含扩展名）
 	Content string // 模板内容
+	Config  map[string]string
 }
 
 // PromptManager 提示词管理器
@@ -75,6 +76,8 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 			continue
 		}
 
+		parsedContent, config := parseTemplateContent(string(content))
+
 		// 提取文件名（不含扩展名）作为模板名称
 		fileName := filepath.Base(file)
 		templateName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
@@ -82,7 +85,8 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 		// 存储模板
 		pm.templates[templateName] = &PromptTemplate{
 			Name:    templateName,
-			Content: string(content),
+			Content: parsedContent,
+			Config:  config,
 		}
 
 		log.Printf("  📄 加载提示词模板: %s (%s)", templateName, fileName)
@@ -159,4 +163,40 @@ func GetAllPromptTemplates() []*PromptTemplate {
 // ReloadPromptTemplates 重新加载所有模板（全局函数）
 func ReloadPromptTemplates() error {
 	return globalPromptManager.ReloadTemplates(promptsDir)
+}
+
+func parseTemplateContent(raw string) (string, map[string]string) {
+	config := make(map[string]string)
+
+	const (
+		startTag = "[[config]]"
+		endTag   = "[[/config]]"
+	)
+
+	start := strings.Index(raw, startTag)
+	if start != -1 {
+		rest := raw[start+len(startTag):]
+		endRel := strings.Index(rest, endTag)
+		if endRel != -1 {
+			configBlock := rest[:endRel]
+			for _, line := range strings.Split(configBlock, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+					continue
+				}
+				if idx := strings.Index(line, "="); idx != -1 {
+					key := strings.TrimSpace(line[:idx])
+					value := strings.TrimSpace(line[idx+1:])
+					if key != "" {
+						config[key] = value
+					}
+				}
+			}
+
+			raw = raw[:start] + rest[endRel+len(endTag):]
+		}
+	}
+
+	raw = strings.TrimLeft(raw, "\n")
+	return raw, config
 }

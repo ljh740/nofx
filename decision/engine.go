@@ -8,6 +8,7 @@ import (
 	"nofx/mcp"
 	"nofx/news"
 	"nofx/pool"
+	"strconv"
 	"regexp"
 	"strings"
 	"time"
@@ -297,57 +298,61 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 
 	template, err := GetPromptTemplate(templateName)
 	if err != nil {
-		// 如果模板不存在，记录错误并使用 default
 		log.Printf("⚠️  提示词模板 '%s' 不存在，使用 default: %v", templateName, err)
 		template, err = GetPromptTemplate("default")
 		if err != nil {
-			// 如果连 default 都不存在，使用内置的简化版本（最后防线）
 			log.Printf("❌ 无法加载任何提示词模板，使用内置简化版本")
-			sb.WriteString("你是专业的加密货币交易AI。请根据市场数据做出交易决策。\n\n")
-		} else {
-			sb.WriteString(template.Content)
-			sb.WriteString("\n\n")
+			template = nil
 		}
-	} else {
-		sb.WriteString(template.Content)
-		sb.WriteString("\n\n")
 	}
 
-	// 根据模板选择风险回报阈值
-	minRiskReward := 3.0
-	switch templateName {
-	case "adaptive", "adaptive_relaxed":
-		minRiskReward = 2.5
-	case "adaptive_strict":
-		minRiskReward = 4.0
-	}
-	rrDisplay := ""
-	rewardPercent := ""
-	if float64(int(minRiskReward)) == minRiskReward {
-		rrDisplay = fmt.Sprintf("1:%d", int(minRiskReward))
-		rewardPercent = fmt.Sprintf("%d", int(minRiskReward))
+	minRiskReward := readFloatConfig(template, "min_risk_reward", 3.0)
+	maxPositions := readIntConfig(template, "max_positions", 3)
+	altcoinMinMultiplier := readFloatConfig(template, "altcoin_min_position_multiplier", 0.8)
+	altcoinMaxMultiplier := readFloatConfig(template, "altcoin_max_position_multiplier", 1.5)
+	btcMinMultiplier := readFloatConfig(template, "btc_min_position_multiplier", 5.0)
+	btcMaxMultiplier := readFloatConfig(template, "btc_max_position_multiplier", 10.0)
+	marginUsageLimit := readFloatConfig(template, "max_margin_usage_percent", 90.0)
+	sampleRiskUSD := readFloatConfig(template, "sample_risk_usd", 300.0)
+
+	formattedMinRR := formatFloatTrim(minRiskReward)
+	rrDisplay := fmt.Sprintf("1:%s", formattedMinRR)
+	rewardPercent := formattedMinRR
+
+	if template != nil {
+		placeholders := cloneConfigMap(template.Config)
+		placeholders["min_risk_reward"] = formattedMinRR
+		placeholders["max_positions"] = strconv.Itoa(maxPositions)
+		placeholders["altcoin_min_position_multiplier"] = formatFloatTrim(altcoinMinMultiplier)
+		placeholders["altcoin_max_position_multiplier"] = formatFloatTrim(altcoinMaxMultiplier)
+		placeholders["btc_min_position_multiplier"] = formatFloatTrim(btcMinMultiplier)
+		placeholders["btc_max_position_multiplier"] = formatFloatTrim(btcMaxMultiplier)
+		placeholders["max_margin_usage_percent"] = formatFloatTrim(marginUsageLimit)
+		placeholders["sample_risk_usd"] = formatFloatTrim(sampleRiskUSD)
+		sb.WriteString(applyTemplatePlaceholders(template.Content, placeholders))
+		sb.WriteString("\n\n")
 	} else {
-		rrDisplay = fmt.Sprintf("1:%.1f", minRiskReward)
-		rewardPercent = fmt.Sprintf("%.1f", minRiskReward)
+		sb.WriteString("你是专业的加密货币交易AI。请根据市场数据做出交易决策。\n\n")
 	}
 
 	// 2. 硬约束（风险控制）- 动态生成（始终追加）
 	sb.WriteString("# 硬约束（风险控制）\n\n")
 	sb.WriteString(fmt.Sprintf("1. 风险回报比: 必须 ≥ %s（冒1%%风险，赚%s%%+收益）\n", rrDisplay, rewardPercent))
-	sb.WriteString("2. 最多持仓: 3个币种（质量>数量）\n")
+	sb.WriteString(fmt.Sprintf("2. 最多持仓: %d个币种（质量>数量）\n", maxPositions))
 	sb.WriteString(fmt.Sprintf("3. 单币仓位: 山寨%.0f-%.0f U (%dx杠杆) | BTC/ETH %.0f-%.0f U (%dx杠杆)\n",
-		accountEquity*0.8, accountEquity*1.5, altcoinLeverage,
-		accountEquity*5, accountEquity*10, btcEthLeverage))
+		accountEquity*altcoinMinMultiplier, accountEquity*altcoinMaxMultiplier, altcoinLeverage,
+		accountEquity*btcMinMultiplier, accountEquity*btcMaxMultiplier, btcEthLeverage))
 	sb.WriteString(fmt.Sprintf("4. 杠杆限制: **山寨币最大%dx杠杆** | **BTC/ETH最大%dx杠杆** (⚠️ 严格执行，不可超过)\n", altcoinLeverage, btcEthLeverage))
-	sb.WriteString("5. 保证金: 总使用率 ≤ 90%\n")
+	sb.WriteString(fmt.Sprintf("5. 保证金: 总使用率 ≤ %.0f%%\n\n", marginUsageLimit))
 	sb.WriteString("6. 开仓金额: 建议 **≥12 USDT** (交易所最小名义价值 10 USDT + 安全边际)\n\n")
 
 	// 3. 输出格式 - 动态生成（始终追加）
 	sb.WriteString("# 输出格式\n\n")
-	sb.WriteString("第一步: 思维链（纯文本，若有则放在前面）\n")
-	sb.WriteString("第二步: 只输出**一个 JSON 数组本体**（不要任何 Markdown 围栏/解释/前后缀/空行）\n\n")
-	sb.WriteString("[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
+	sb.WriteString("第一步: 思维链（纯文本）\n")
+	sb.WriteString("简洁分析你的思考过程\n\n")
+	sb.WriteString("第二步: JSON决策数组\n\n")
+	sb.WriteString("```json\n[\n")
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": %.0f, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*btcMinMultiplier, sampleRiskUSD))
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
 	sb.WriteString("]\n\n")
 	sb.WriteString("字段说明:\n")
@@ -670,6 +675,86 @@ func validateDecisions(decisions []Decision, accountEquity float64, btcEthLevera
 		}
 	}
 	return nil
+}
+
+// findMatchingBracket 查找匹配的右括号
+func findMatchingBracket(s string, start int) int {
+	if start >= len(s) || s[start] != '[' {
+		return -1
+	}
+
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+
+	return -1
+}
+
+func applyTemplatePlaceholders(content string, config map[string]string) string {
+	if len(config) == 0 {
+		return content
+	}
+
+	result := content
+	for key, value := range config {
+		placeholder := fmt.Sprintf("{{%s}}", key)
+		result = strings.ReplaceAll(result, placeholder, value)
+	}
+	return result
+}
+
+func formatFloatTrim(f float64) string {
+	s := strconv.FormatFloat(f, 'f', 4, 64)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	if s == "" {
+		return "0"
+	}
+	return s
+}
+
+func cloneConfigMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return make(map[string]string)
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func readFloatConfig(template *PromptTemplate, key string, defaultVal float64) float64 {
+	if template == nil || len(template.Config) == 0 {
+		return defaultVal
+	}
+	if val, ok := template.Config[key]; ok {
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
+			return parsed
+		}
+	}
+	return defaultVal
+}
+
+func readIntConfig(template *PromptTemplate, key string, defaultVal int) int {
+	if template == nil || len(template.Config) == 0 {
+		return defaultVal
+	}
+	if val, ok := template.Config[key]; ok {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(val)); err == nil {
+			return parsed
+		}
+	}
+	return defaultVal
 }
 
 // validateDecision 验证单个决策的有效性
