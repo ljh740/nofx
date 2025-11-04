@@ -313,12 +313,31 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 		sb.WriteString("\n\n")
 	}
 
+	// 根据模板选择风险回报阈值
+	minRiskReward := 3.0
+	switch templateName {
+	case "adaptive", "adaptive_relaxed":
+		minRiskReward = 2.5
+	case "adaptive_strict":
+		minRiskReward = 4.0
+	}
+	rrDisplay := ""
+	rewardPercent := ""
+	if float64(int(minRiskReward)) == minRiskReward {
+		rrDisplay = fmt.Sprintf("1:%d", int(minRiskReward))
+		rewardPercent = fmt.Sprintf("%d", int(minRiskReward))
+	} else {
+		rrDisplay = fmt.Sprintf("1:%.1f", minRiskReward)
+		rewardPercent = fmt.Sprintf("%.1f", minRiskReward)
+	}
+
 	// 2. 硬约束（风险控制）- 动态生成（始终追加）
 	sb.WriteString("# 硬约束（风险控制）\n\n")
-	sb.WriteString("1. 风险回报比: 必须 ≥ 1:3（冒1%风险，赚3%+收益）\n")
+	sb.WriteString(fmt.Sprintf("1. 风险回报比: 必须 ≥ %s（冒1%%风险，赚%s%%+收益）\n", rrDisplay, rewardPercent))
 	sb.WriteString("2. 最多持仓: 3个币种（质量>数量）\n")
-	sb.WriteString(fmt.Sprintf("3. 单币仓位: 山寨%.0f-%.0f U | BTC/ETH %.0f-%.0f U\n",
-		accountEquity*0.8, accountEquity*1.5, accountEquity*5, accountEquity*10))
+	sb.WriteString(fmt.Sprintf("3. 单币仓位: 山寨%.0f-%.0f U (%dx杠杆) | BTC/ETH %.0f-%.0f U (%dx杠杆)\n",
+		accountEquity*0.8, accountEquity*1.5, altcoinLeverage,
+		accountEquity*5, accountEquity*10, btcEthLeverage))
 	sb.WriteString(fmt.Sprintf("4. 杠杆限制: **山寨币最大%dx杠杆** | **BTC/ETH最大%dx杠杆** (⚠️ 严格执行，不可超过)\n", altcoinLeverage, btcEthLeverage))
 	sb.WriteString("5. 保证金: 总使用率 ≤ 90%\n")
 	sb.WriteString("6. 开仓金额: 建议 **≥12 USDT** (交易所最小名义价值 10 USDT + 安全边际)\n\n")
