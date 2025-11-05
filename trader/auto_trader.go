@@ -95,33 +95,6 @@ type PositionSnapshot struct {
 	Leverage   int
 }
 
-// TrendingCoinProvider 由可插拔模块实现，用于提供额外的热门交易币种。
-type TrendingCoinProvider interface {
-	TrendingCoins(traderID string, existing []string) []string
-}
-
-var (
-	trendingProviderMu sync.RWMutex
-	trendingProvider   TrendingCoinProvider
-)
-
-// RegisterTrendingCoinProvider 注册热门币种提供者，主流程可在启动时调用一次。
-func RegisterTrendingCoinProvider(provider TrendingCoinProvider) {
-	trendingProviderMu.Lock()
-	defer trendingProviderMu.Unlock()
-	trendingProvider = provider
-}
-
-func getTrendingCoins(traderID string, existing []string) []string {
-	trendingProviderMu.RLock()
-	provider := trendingProvider
-	trendingProviderMu.RUnlock()
-	if provider == nil {
-		return nil
-	}
-	return provider.TrendingCoins(traderID, existing)
-}
-
 // AutoTrader 自动交易器
 type AutoTrader struct {
 	id                    string // Trader唯一标识
@@ -1771,68 +1744,60 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 
 // getCandidateCoins 获取交易员的候选币种列表
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-	symbolSet := make(map[string]struct{})
-	symbolsInOrder := make([]string, 0)
-	var candidateCoins []decision.CandidateCoin
-
-	addCandidate := func(symbol string, sources []string) {
-		if symbol == "" {
-			return
-		}
-		if _, exists := symbolSet[symbol]; exists {
-			return
-		}
-		symbolSet[symbol] = struct{}{}
-		symbolsInOrder = append(symbolsInOrder, symbol)
-		candidateCoins = append(candidateCoins, decision.CandidateCoin{
-			Symbol:  symbol,
-			Sources: sources,
-		})
-	}
-
 	if len(at.tradingCoins) == 0 {
+		// 使用数据库配置的默认币种列表
+		var candidateCoins []decision.CandidateCoin
+
 		if len(at.defaultCoins) > 0 {
+			// 使用数据库中配置的默认币种
 			for _, coin := range at.defaultCoins {
-				addCandidate(normalizeSymbol(coin), []string{"default"})
+				symbol := normalizeSymbol(coin)
+				candidateCoins = append(candidateCoins, decision.CandidateCoin{
+					Symbol:  symbol,
+					Sources: []string{"default"}, // 标记为数据库默认币种
+				})
 			}
 			log.Printf("📋 [%s] 使用数据库默认币种: %d个币种 %v",
 				at.name, len(candidateCoins), at.defaultCoins)
+			return candidateCoins, nil
 		} else {
-			const ai500Limit = 20
+			// 如果数据库中没有配置默认币种，则使用AI500+OI Top作为fallback
+			const ai500Limit = 20 // AI500取前20个评分最高的币种
+
 			mergedPool, err := pool.GetMergedCoinPool(ai500Limit)
 			if err != nil {
 				return nil, fmt.Errorf("获取合并币种池失败: %w", err)
 			}
+
+			// 构建候选币种列表（包含来源信息）
 			for _, symbol := range mergedPool.AllSymbols {
-				addCandidate(symbol, mergedPool.SymbolSources[symbol])
+				sources := mergedPool.SymbolSources[symbol]
+				candidateCoins = append(candidateCoins, decision.CandidateCoin{
+					Symbol:  symbol,
+					Sources: sources, // "ai500" 和/或 "oi_top"
+				})
 			}
+
 			log.Printf("📋 [%s] 数据库无默认币种配置，使用AI500+OI Top: AI500前%d + OI_Top20 = 总计%d个候选币种",
 				at.name, ai500Limit, len(candidateCoins))
+			return candidateCoins, nil
 		}
 	} else {
+		// 使用自定义币种列表
+		var candidateCoins []decision.CandidateCoin
 		for _, coin := range at.tradingCoins {
-			addCandidate(normalizeSymbol(coin), []string{"custom"})
+			// 确保币种格式正确（转为大写USDT交易对）
+			symbol := normalizeSymbol(coin)
+			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+				Symbol:  symbol,
+				Sources: []string{"custom"}, // 标记为自定义来源
+			})
 		}
+
 		log.Printf("📋 [%s] 使用自定义币种: %d个币种 %v",
 			at.name, len(candidateCoins), at.tradingCoins)
+		return candidateCoins, nil
 	}
-
-	if extra := getTrendingCoins(at.id, symbolsInOrder); len(extra) > 0 {
-		appended := make([]string, 0, len(extra))
-		for _, coin := range extra {
-			symbol := normalizeSymbol(coin)
-			before := len(candidateCoins)
-			addCandidate(symbol, []string{"trending"})
-			if len(candidateCoins) > before {
-				appended = append(appended, symbol)
-			}
-		}
-		if len(appended) > 0 {
-			log.Printf("📈 [%s] 插入热门币种: %v", at.name, appended)
-		}
-	}
-
-	return candidateCoins, nil
 }
 
 // normalizeSymbol 标准化币种符号（确保以USDT结尾）
