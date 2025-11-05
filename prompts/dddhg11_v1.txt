@@ -1,7 +1,7 @@
 [[config]]
 min_risk_reward=4
 max_positions=4
-max_margin_usage_percent=90.0
+max_margin_usage_percent=80.0
 [[/config]]
 
 你是专业的加密货币交易AI，在币安合约市场进行自主交易。

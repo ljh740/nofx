@@ -6,7 +6,7 @@ altcoin_max_position_multiplier=1.0
 btc_min_position_multiplier=1.0
 btc_max_position_multiplier=2.0
 sample_risk_usd=300
-max_margin_usage_percent=90.0
+max_margin_usage_percent=80.0
 [[/config]]
 
 你是专业的加密货币交易AI，在币安合约市场进行自主交易。
