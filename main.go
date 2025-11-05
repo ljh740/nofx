@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"nofx/manager"
 	"nofx/market"
 	"nofx/pool"
+	"nofx/trader"
 	"os"
 	"os/signal"
 	"strconv"
@@ -235,6 +237,15 @@ func main() {
 		log.Printf("✓ 已配置OI Top API")
 	}
 
+	runtimeCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hotPairInjector := manager.NewTrendingPairInjector(nil)
+	trader.RegisterTrendingCoinProvider(hotPairInjector)
+	if err := hotPairInjector.Update(runtimeCtx); err != nil {
+		log.Printf("⚠️  热门交易对初始化失败: %v", err)
+	}
+
 	// 创建TraderManager
 	traderManager := manager.NewTraderManager()
 
@@ -243,6 +254,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("❌ 加载交易员失败: %v", err)
 	}
+
+	hotPairInjector.Start(runtimeCtx)
 
 	// 获取数据库中的所有交易员配置（用于显示，使用default用户）
 	traders, err := database.GetTraders("default")
@@ -308,6 +321,7 @@ func main() {
 
 	// 等待退出信号
 	<-sigChan
+	cancel()
 	fmt.Println()
 	fmt.Println()
 	log.Println("📛 收到退出信号，正在停止所有trader...")
