@@ -624,6 +624,7 @@ func containsUserPrefix(traderID string) bool {
 func (tm *TraderManager) LoadUserTraders(database *config.Database, userID string) error {
 	autoStartTraders := make([]*trader.AutoTrader, 0)
 	staleTraders := make([]*trader.AutoTrader, 0)
+	reloadedTraders := make([]*trader.AutoTrader, 0)
 	tm.mu.Lock()
 	defer func() {
 		tm.mu.Unlock()
@@ -631,6 +632,12 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 		// 停止并清理内存中已删除的交易员
 		for _, tr := range staleTraders {
 			log.Printf("🧹 移除用户 %s 已删除的交易员: %s", userID, tr.GetID())
+			tr.Stop()
+		}
+
+		// 停止被新配置替换的交易员
+		for _, tr := range reloadedTraders {
+			log.Printf("🔄 停止用户 %s 旧实例: %s", userID, tr.GetID())
 			tr.Stop()
 		}
 
@@ -712,9 +719,10 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 
 	// 为每个交易员获取AI模型和交易所配置
 	for _, traderCfg := range traders {
-		// 检查是否已经加载过这个交易员
-		if _, exists := tm.traders[traderCfg.ID]; exists {
-			log.Printf("⚠️ 交易员 %s 已经加载，跳过", traderCfg.Name)
+		// 如果已经存在同名交易员且不属于该用户，则跳过
+		existingTraderInstance, exists := tm.traders[traderCfg.ID]
+		if exists && !isUserTrader(traderCfg.ID, userID) {
+			log.Printf("⚠️ 交易员 %s 已被其他用户占用，跳过", traderCfg.Name)
 			continue
 		}
 
@@ -784,6 +792,11 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 		if err != nil {
 			log.Printf("⚠️ 加载交易员 %s 失败: %v", traderCfg.Name, err)
 			continue
+		}
+
+		if exists {
+			reloadedTraders = append(reloadedTraders, existingTraderInstance)
+			log.Printf("🔁 用户 %s 的交易员 %s 已刷新配置", userID, traderCfg.Name)
 		}
 
 		if traderCfg.IsRunning {
