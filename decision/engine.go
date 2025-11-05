@@ -8,8 +8,8 @@ import (
 	"nofx/mcp"
 	"nofx/news"
 	"nofx/pool"
-	"regexp"
 	"strconv"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,7 +55,7 @@ type AccountInfo struct {
 // CandidateCoin 候选币种（来自币种池）
 type CandidateCoin struct {
 	Symbol  string   `json:"symbol"`
-	Sources []string `json:"sources"` // 来源: "ai500", "oi_top", "trending" 等
+	Sources []string `json:"sources"` // 来源: "ai500" 和/或 "oi_top"
 }
 
 // OITopData 持仓量增长Top数据（用于AI决策参考）
@@ -345,7 +345,6 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString(fmt.Sprintf("4. 杠杆限制: **山寨币最大%dx杠杆** | **BTC/ETH最大%dx杠杆** (⚠️ 严格执行，不可超过)\n", altcoinLeverage, btcEthLeverage))
 	sb.WriteString(fmt.Sprintf("5. 保证金: 总使用率 ≤ %.0f%%\n\n", marginUsageLimit))
 	sb.WriteString("6. 开仓金额: 建议 **≥12 USDT** (交易所最小名义价值 10 USDT + 安全边际)\n\n")
-	sb.WriteString("7. 热门榜单币种可能短期脱离 BTC 节奏，必须单独验证其趋势是否与核心市场同步后再行动\n\n")
 
 	// 3. 输出格式 - 动态生成（始终追加）
 	sb.WriteString("# 输出格式\n\n")
@@ -435,21 +434,10 @@ func buildUserPrompt(ctx *Context) string {
 		displayedCount++
 
 		sourceTags := ""
-		if len(coin.Sources) > 0 {
-			labels := make([]string, 0, len(coin.Sources))
-			for _, src := range coin.Sources {
-				switch src {
-				case "ai500":
-					labels = append(labels, "AI500评分")
-				case "oi_top":
-					labels = append(labels, "OI_Top持仓增长")
-				case "trending":
-					labels = append(labels, "热门榜单")
-				default:
-					labels = append(labels, strings.ToUpper(src))
-				}
-			}
-			sourceTags = fmt.Sprintf(" (%s)", strings.Join(labels, " + "))
+		if len(coin.Sources) > 1 {
+			sourceTags = " (AI500+OI_Top双重信号)"
+		} else if len(coin.Sources) == 1 && coin.Sources[0] == "oi_top" {
+			sourceTags = " (OI_Top持仓增长)"
 		}
 
 		// 使用FormatMarketData输出完整市场数据
