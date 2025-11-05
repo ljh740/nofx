@@ -91,6 +91,10 @@ func (s *Server) setupRoutes() {
 		api.GET("/prompt-templates", s.handleGetPromptTemplates)
 		api.GET("/prompt-templates/:name", s.handleGetPromptTemplate)
 
+		// AI竞赛相关（公开访问）
+		api.GET("/competition", s.handleCompetition)
+		api.GET("/equity-history", s.handleEquityHistory)
+
 		// 需要认证的路由
 		protected := api.Group("/", s.authMiddleware())
 		{
@@ -117,9 +121,6 @@ func (s *Server) setupRoutes() {
 			protected.GET("/user/signal-sources", s.handleGetUserSignalSource)
 			protected.POST("/user/signal-sources", s.handleSaveUserSignalSource)
 
-			// 竞赛总览
-			protected.GET("/competition", s.handleCompetition)
-
 			// 指定trader的数据（使用query参数 ?trader_id=xxx）
 			protected.GET("/status", s.handleStatus)
 			protected.GET("/account", s.handleAccount)
@@ -127,7 +128,6 @@ func (s *Server) setupRoutes() {
 			protected.GET("/decisions", s.handleDecisions)
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
-			protected.GET("/equity-history", s.handleEquityHistory)
 			protected.GET("/performance", s.handlePerformance)
 		}
 	}
@@ -1213,12 +1213,10 @@ func (s *Server) handleStatistics(c *gin.Context) {
 
 // handleCompetition 竞赛总览（对比所有trader）
 func (s *Server) handleCompetition(c *gin.Context) {
-	userID := c.GetString("user_id")
-
-	// 确保用户的交易员已加载到内存中
-	err := s.traderManager.LoadUserTraders(s.database, userID)
-	if err != nil {
-		log.Printf("⚠️ 加载用户 %s 的交易员失败: %v", userID, err)
+	if userID := c.GetString("user_id"); userID != "" {
+		if err := s.traderManager.LoadUserTraders(s.database, userID); err != nil {
+			log.Printf("⚠️ 加载用户 %s 的交易员失败: %v", userID, err)
+		}
 	}
 
 	competition, err := s.traderManager.GetCompetitionData()
@@ -1234,17 +1232,26 @@ func (s *Server) handleCompetition(c *gin.Context) {
 
 // handleEquityHistory 收益率历史数据
 func (s *Server) handleEquityHistory(c *gin.Context) {
-	userID := c.GetString("user_id")
-	_, traderID, err := s.getTraderFromQuery(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	traderID := c.Query("trader_id")
+	if traderID == "" {
+		ids := s.traderManager.GetTraderIDs()
+		if len(ids) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "没有可用的交易员"})
+			return
+		}
+		traderID = ids[0]
 	}
 
 	trader, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
+	}
+
+	if userID := c.GetString("user_id"); userID != "" {
+		if err := s.traderManager.LoadUserTraders(s.database, userID); err != nil {
+			log.Printf("⚠️ 加载用户 %s 的交易员失败: %v", userID, err)
+		}
 	}
 
 	// 获取尽可能多的历史数据（几天的数据）
@@ -1269,19 +1276,10 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		CycleNumber      int     `json:"cycle_number"`
 	}
 
-	traderRecord, _, _, err := s.database.GetTraderConfig(userID, traderID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "无法获取交易员配置"})
-		return
-	}
+	initialBalance := s.resolveInitialBalance(trader)
 
-	initialBalance := traderRecord.InitialBalance
-
-	// 如果还是无法获取，返回错误
 	if initialBalance == 0 {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "无法获取初始余额",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取初始余额"})
 		return
 	}
 
@@ -1331,6 +1329,23 @@ func (s *Server) handlePerformance(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, performance)
+}
+
+func (s *Server) resolveInitialBalance(tr *trader.AutoTrader) float64 {
+	initial := tr.GetInitialBalance()
+	if initial != 0 {
+		return initial
+	}
+
+	userID := tr.GetUserID()
+	if userID == "" {
+		return 0
+	}
+
+	if record, _, _, err := s.database.GetTraderConfig(userID, tr.GetID()); err == nil {
+		initial = record.InitialBalance
+	}
+	return initial
 }
 
 // authMiddleware JWT认证中间件

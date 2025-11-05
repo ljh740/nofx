@@ -1508,6 +1508,11 @@ func (at *AutoTrader) GetID() string {
 	return at.id
 }
 
+// GetUserID 返回交易员归属的用户ID
+func (at *AutoTrader) GetUserID() string {
+	return at.userID
+}
+
 // GetName 获取trader名称
 func (at *AutoTrader) GetName() string {
 	return at.name
@@ -1521,6 +1526,11 @@ func (at *AutoTrader) GetAIModel() string {
 // GetExchange 获取交易所
 func (at *AutoTrader) GetExchange() string {
 	return at.exchange
+}
+
+// GetInitialBalance 返回配置的初始资金
+func (at *AutoTrader) GetInitialBalance() float64 {
+	return at.initialBalance
 }
 
 // SetCustomPrompt 设置自定义交易策略prompt
