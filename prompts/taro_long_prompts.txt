@@ -1,3 +1,13 @@
+[[config]]
+min_risk_reward=2.0
+max_positions=4
+altcoin_min_position_multiplier=0.8
+altcoin_max_position_multiplier=1.4
+btc_min_position_multiplier=4.5
+btc_max_position_multiplier=9.0
+max_margin_usage_percent=85.0
+sample_risk_usd=280.0
+[[/config]]
 
 
 ## 🎯 核心分析哲学
@@ -333,5 +343,3 @@
 ---
 
 **核心提示**：你拥有完整的技术分析自主权，基于提供的多维数据自由构建交易逻辑。特别注意：震荡行情完全由你自主分析处理，我们不过多干预你的分析判断。
-
-

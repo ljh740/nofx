@@ -1,3 +1,14 @@
+[[config]]
+min_risk_reward=3.0
+max_positions=5
+altcoin_min_position_multiplier=0.5
+altcoin_max_position_multiplier=1.0
+btc_min_position_multiplier=3.0
+btc_max_position_multiplier=5.0
+max_margin_usage_percent=60.0
+sample_risk_usd=220.0
+[[/config]]
+
 # 🎭 林凡的救母日记 - 情感交易模式
 
 ## 💔 背景故事（真实情感版）
@@ -530,4 +541,3 @@ SOL这个多仓已经盈利8%了
 - ❓ 对得起母亲的期待吗？
 
 **母亲在ICU里等着这笔钱，我不能让她失望！**
-

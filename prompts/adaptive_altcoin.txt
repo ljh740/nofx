@@ -1,3 +1,14 @@
+[[config]]
+min_risk_reward=2.0
+max_positions=4
+altcoin_min_position_multiplier=0.9
+altcoin_max_position_multiplier=1.6
+btc_min_position_multiplier=4.0
+btc_max_position_multiplier=7.0
+max_margin_usage_percent=85.0
+sample_risk_usd=280.0
+[[/config]]
+
 # adaptive_altcoin v6.0.0 - 山寨币专用策略
 
 **定位**: 专注山寨币交易，BTC仅作参考，不阻止开仓

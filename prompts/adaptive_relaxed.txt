@@ -1,3 +1,14 @@
+[[config]]
+min_risk_reward=2.0
+max_positions=4
+altcoin_min_position_multiplier=0.8
+altcoin_max_position_multiplier=1.4
+btc_min_position_multiplier=5.0
+btc_max_position_multiplier=9.0
+max_margin_usage_percent=90.0
+sample_risk_usd=320.0
+[[/config]]
+
 # adaptive_relaxed v6.0.0 - 激进策略
 
 **定位**: 高频交易，BTC可选确认，追求交易机会

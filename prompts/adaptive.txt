@@ -1,3 +1,14 @@
+[[config]]
+min_risk_reward=2.0
+max_positions=3
+altcoin_min_position_multiplier=0.6
+altcoin_max_position_multiplier=1.0
+btc_min_position_multiplier=3.0
+btc_max_position_multiplier=6.0
+max_margin_usage_percent=75.0
+sample_risk_usd=250.0
+[[/config]]
+
 # adaptive v6.0.0 - 保守策略
 
 **定位**: 严格风控，BTC强制确认，高胜率优先

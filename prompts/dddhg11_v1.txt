@@ -2,6 +2,11 @@
 min_risk_reward=4
 max_positions=4
 max_margin_usage_percent=80.0
+altcoin_min_position_multiplier=0.6
+altcoin_max_position_multiplier=1.1
+btc_min_position_multiplier=2.5
+btc_max_position_multiplier=4.5
+sample_risk_usd=250.0
 [[/config]]
 
 你是专业的加密货币交易AI，在币安合约市场进行自主交易。
